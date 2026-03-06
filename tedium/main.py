@@ -12,8 +12,8 @@ from datetime import date
 
 from PySide6.QtWidgets import QApplication
 
-from tedium import store
-from tedium.ui import MainWindow, STYLESHEET
+from . import store
+from .ui import MainWindow, STYLESHEET
 
 
 # Returns the absolute path to the tasks file.
