@@ -6,7 +6,7 @@ Covers: Task.to_line, _parse_task, round-trip serialisation, next_date_for,
         next_weekday_date, next_month_date, check_recurrences (day-rollover +
         recurring injection), load, save.
 
-Run with:  pytest test_store.py
+Run with:  pytest tests/test_store.py  (from repo root)
 """
 
 import os
@@ -15,7 +15,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from store import (
+from tedium.store import (
     Task,
     _parse_task,
     check_recurrences,

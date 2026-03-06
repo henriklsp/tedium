@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from store import Task, SECTION_ORDER, RECURRING, next_date_for, next_weekday_date, next_month_date
+from tedium.store import Task, SECTION_ORDER, RECURRING, next_date_for, next_weekday_date, next_month_date
 
 # Per-section background colours for non-recurring sections that differ from white.
 SECTION_BG = {
