@@ -14,7 +14,7 @@ from dateutil.relativedelta import relativedelta
 from typing import Optional
 
 SECTION_ORDER = ["Today", "Tomorrow", "Whenever", "Daily", "Weekly", "Monthly", "Annually"]
-RECURRING = {"Daily", "Weekly", "Monthly", "Annually"}
+RECURRING = frozenset({"Daily", "Weekly", "Monthly", "Annually"})
 
 DATE_RE = re.compile(r'\[(\d{4}-\d{2}-\d{2})\]$')
 LAST_DATE_RE = re.compile(r'^# last_date: (\d{4}-\d{2}-\d{2})')
@@ -62,7 +62,7 @@ def _parse_task(line: str) -> Optional[Task]:
     urgent = False
     important = False
     m = re.match(r'^\[(!?\*?)\]\s*', line)
-    if m:
+    if m and m.group(1):
         marker = m.group(1)
         urgent = "!" in marker
         important = "*" in marker
@@ -97,8 +97,6 @@ def load(path: str) -> tuple[dict[str, list[Task]], Optional[date]]:
 
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
-            line = line.rstrip("\n")
-
             # Metadata line
             m = LAST_DATE_RE.match(line)
             if m:
@@ -130,9 +128,7 @@ def load(path: str) -> tuple[dict[str, list[Task]], Optional[date]]:
 
 # Atomically writes all sections to the task file, prefixed with today's date as metadata.
 # Uses a .tmp write-then-replace strategy to prevent data loss on crash.
-def save(path: str, sections: dict[str, list[Task]], today: Optional[date] = None) -> None:
-    if today is None:
-        today = date.today()
+def save(path: str, sections: dict[str, list[Task]], today: date) -> None:
     tmp_path = path + ".tmp"
     lines = [f"# last_date: {today.isoformat()}", ""]
 
@@ -200,6 +196,8 @@ def next_month_date(month: int) -> date:
 def _apply_day_rollover(
     sections: dict[str, list[Task]], last_date: Optional[date], today: date
 ) -> bool:
+    # If last_date is in the future (e.g. manually edited file), rollover is
+    # skipped until that date passes. If None, this is a first launch.
     if last_date is None or last_date >= today:
         return False
 
@@ -220,7 +218,7 @@ def _inject_recurring_tasks(
 ) -> bool:
     tomorrow = today + timedelta(days=1)
     changed = False
-    for section_name in RECURRING:
+    for section_name in (s for s in SECTION_ORDER if s in RECURRING):
         for task in sections.get(section_name, []):
             if task.next_date is not None and task.next_date <= tomorrow:
                 target = "Today" if task.next_date <= today else "Tomorrow"

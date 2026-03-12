@@ -10,27 +10,31 @@ import os
 import sys
 from datetime import date
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from . import store
 from .ui import MainWindow, STYLESHEET
 
 
-# Returns the absolute path to the tasks file.
-# In a frozen (PyInstaller) build the file lives beside the executable;
-# in development it lives in the user's home directory.
 def get_tasks_path() -> str:
+    return os.path.join(os.path.expanduser("~"), "tasks.txt")
+
+
+def get_icon() -> QIcon:
     if getattr(sys, "frozen", False):
-        base = os.path.dirname(sys.executable)
+        base = os.path.join(sys._MEIPASS, "assets")
     else:
-        base = os.path.expanduser("~")
-    return os.path.join(base, "tasks.txt")
+        base = os.path.join(os.path.dirname(__file__), "..", "assets")
+    return QIcon(os.path.join(base, "tedium.ico"))
 
 
 # Orchestrates application startup: creates the Qt application, loads and
 # prepares task data, constructs the main window, and enters the event loop.
 def main():
     app = QApplication(sys.argv)
+    icon = get_icon()
+    app.setWindowIcon(icon)
     app.setStyleSheet(STYLESHEET)
 
     path = get_tasks_path()
@@ -43,11 +47,11 @@ def main():
     def save_callback(secs):
         store.save(path, secs, date.today())
 
-    window = MainWindow(sections, save_callback)
+    window = MainWindow(sections, save_callback, last_date)
+    window.setWindowIcon(icon)
     window.show()
 
+    screen = app.primaryScreen().availableGeometry()
+    window.move(screen.right() - window.width(), screen.top())
+
     sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()
