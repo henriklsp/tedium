@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import store
-from .store import Task, SECTION_ORDER, RECURRING, next_date_for, next_weekday_date, next_month_date
+from .store import Task, SECTION_ORDER, RECURRING, next_date_for, next_weekday_date, next_month_date, task_priority
 
 # Per-section background colours for non-recurring sections that differ from white.
 SECTION_BG = {
@@ -55,7 +55,7 @@ STYLESHEET = """
 QWidget {
     background-color: #ffffff;
     font-family: "Segoe UI", Arial, sans-serif;
-    font-size: 11pt;
+    font-size: 12pt;
     color: #222222;
 }
 QScrollArea {
@@ -116,8 +116,7 @@ def _widget_bg(section_name: str, task: Task) -> str:
 # Returns the full QLineEdit stylesheet string reflecting the task's
 # done/urgent/important state and the section's font size.
 def _edit_css(section_name: str, task: Task) -> str:
-    size = "font-size: 13pt; " if section_name == "Today" else ""
-    base = f"QLineEdit {{ border: none; background: transparent; padding: 1px 0; {size}"
+    base = f"QLineEdit {{ border: none; background: transparent; padding: 1px 0; "
     if task.done:
         extra = "color: #aaaaaa; text-decoration: line-through; "
     elif task.urgent and task.important:
@@ -133,11 +132,10 @@ def _edit_css(section_name: str, task: Task) -> str:
 
 # Returns the QLabel stylesheet for the completion checkmark, sized to
 # match the section's font size.
-def _check_label_css(section_name: str) -> str:
-    size_pt = "13pt" if section_name == "Today" else "11pt"
+def _check_label_css() -> str:
     return (
-        f"QLabel {{ color: #aaaaaa; background: transparent; "
-        f"font-size: {size_pt}; padding: 0 2px 0 2px; }}"
+        "QLabel { color: #aaaaaa; background: transparent; "
+        "font-size: 12pt; padding: 0 2px 0 2px; }"
     )
 
 
@@ -277,11 +275,11 @@ class _TaskLineEdit(QLineEdit):
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton and self.isReadOnly():
             # Recurring tasks cannot be completed — click is a no-op
-            if self._tw.section_name in RECURRING:
-                return
-            self._tw.task.done = not self._tw.task.done
-            self._tw._apply_style()
-            self._tw.changed.emit()
+            if self._tw.section_name not in RECURRING:
+                self._tw.task.done = not self._tw.task.done
+                self._tw._apply_style()
+                self._tw.changed.emit()
+            event.accept()
         else:
             super().mousePressEvent(event)
 
@@ -360,7 +358,7 @@ class TaskWidget(QWidget):
     # Sets the checkmark label's stylesheet and visibility based on done state.
     def _update_check_label(self):
         if self.task.done:
-            self._check_lbl.setStyleSheet(_check_label_css(self.section_name))
+            self._check_lbl.setStyleSheet(_check_label_css())
             self._check_lbl.setVisible(True)
         else:
             self._check_lbl.setVisible(False)
@@ -528,13 +526,13 @@ class SectionWidget(QWidget):
         if self.section_name == "Today":
             d = date.today()
             label_html = f'<u>TODAY</u> ({d.strftime("%b")} {d.day})'
-            label_css = ("font-size: 13pt; font-weight: 700; color: #555; "
+            label_css = ("font-size: 12pt; font-weight: 700; color: rgb(80,69,56); "
                          "padding: 4px 0 8px 0; background: transparent;")
         else:
             name = self.section_name.upper()
             label_html = (f'<i><u>{name}</u></i>' if self.section_name in RECURRING
                           else f'<u>{name}</u>')
-            label_css = ("font-size: 9pt; font-weight: 600; color: #999; "
+            label_css = ("font-size: 12pt; font-weight: 600; color: rgb(66,57,47); "
                          "letter-spacing: 1px; padding: 4px 0 6px 0; background: transparent;")
         header = QLabel(label_html)
         header.setStyleSheet(f"QLabel {{ {label_css} }}")
@@ -593,7 +591,8 @@ class SectionWidget(QWidget):
                 return
 
     # Reads the add-task input, creates a new Task (with a next_date for recurring
-    # sections), appends it, and clears the input field.
+    # sections), appends it, and clears the input field. For recurring sections,
+    # deduplicates tasks with the same text and due date, keeping the higher-priority one.
     def _on_add_task(self):
         text = self.add_edit.text().strip()
         if not text:
@@ -601,6 +600,16 @@ class SectionWidget(QWidget):
         task = Task(text=text)
         if self.section_name in RECURRING:
             task.next_date = next_date_for(self.section_name, date.today())
+            existing = next(
+                (t for t in self.tasks if t.text == text),
+                None,
+            )
+            if existing is not None:
+                if task_priority(task) < task_priority(existing):
+                    self._remove_task_object(existing)
+                else:
+                    self.add_edit.clear()
+                    return  # existing is same or higher priority — discard new task
         self.tasks.append(task)
         self._add_task_widget(task)
         self.add_edit.clear()
@@ -705,7 +714,7 @@ class RecurringSeparatorWidget(QWidget):
         # Count label — only visible when collapsed
         self._count_lbl = QLabel()
         self._count_lbl.setStyleSheet(
-            "QLabel { font-size: 8pt; color: #666; background: transparent; }"
+            "QLabel { font-size: 12pt; color: #666; background: transparent; }"
         )
         self._count_lbl.setVisible(False)
         layout.addWidget(self._count_lbl)
@@ -716,7 +725,7 @@ class RecurringSeparatorWidget(QWidget):
         self._btn.setFixedSize(20, 20)
         self._btn.setCursor(Qt.PointingHandCursor)
         self._btn.setStyleSheet(
-            "QPushButton { border: none; font-size: 10pt; background: transparent; "
+            "QPushButton { border: none; font-size: 12pt; background: transparent; "
             "color: #666; padding: 0; }"
             "QPushButton:hover { color: #000; }"
         )
@@ -749,11 +758,12 @@ class RecurringSeparatorWidget(QWidget):
 class MainWindow(QMainWindow):
     # Stores the sections dict and save callback, initialises the debounce timer,
     # and delegates layout construction to _setup_ui.
-    def __init__(self, sections: dict[str, list[Task]], save_callback: Callable, last_date: Optional[date] = None, parent=None):
+    def __init__(self, sections: dict[str, list[Task]], save_callback: Callable, last_date: Optional[date] = None, notif_manager=None, parent=None):
         super().__init__(parent)
         self.sections = sections
         self._save_callback = save_callback
         self._last_known_date: Optional[date] = last_date
+        self._notif_manager = notif_manager
         self.section_widgets: dict[str, SectionWidget] = {}
 
         self._save_timer = QTimer(self)
@@ -767,6 +777,7 @@ class MainWindow(QMainWindow):
         self._rollover_timer.start()
 
         self._setup_ui()
+        self._sync_notif_manager()
 
     # Builds the main window layout: a scroll area containing all section widgets
     # in SECTION_ORDER, with the recurring separator inserted before "Daily".
@@ -814,10 +825,16 @@ class MainWindow(QMainWindow):
         self._filler.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._main_layout.addWidget(self._filler)
 
+    # Pushes the current Today task list to the notification manager, if present.
+    def _sync_notif_manager(self):
+        if self._notif_manager is not None:
+            self._notif_manager.update_today_tasks(self.sections.get("Today", []))
+
     # Restarts the debounce timer on every task change; the actual save fires
     # 500 ms after the last change, preventing excessive disk writes during rapid edits.
     def _on_change(self):
         self._save_timer.start()
+        self._sync_notif_manager()
 
     # Invokes the save callback with the current sections dict.
     def _do_save(self):
@@ -838,6 +855,7 @@ class MainWindow(QMainWindow):
         self._last_known_date = date.today()
         self._save_callback(self.sections)
         self._rebuild_sections()
+        self._sync_notif_manager()
 
     # Tears down all section widgets and rebuilds them from the current sections dict.
     # Today header re-renders with the new date automatically via SectionWidget.__init__.
@@ -851,8 +869,23 @@ class MainWindow(QMainWindow):
         self._filler.deleteLater()
         self._build_section_widgets()
 
+    # Adds new_task to sw, removing any existing lower-priority task with the same text.
+    # If an equal-or-higher-priority task already exists, new_task is discarded.
+    # Returns True if new_task was added.
+    def _deduplicate_into(self, sw: SectionWidget, new_task: Task) -> bool:
+        existing = next((t for t in sw.tasks if t.text == new_task.text), None)
+        if existing is None:
+            sw.add_task_from_outside(new_task)
+            return True
+        if task_priority(new_task) < task_priority(existing):
+            sw._remove_task_object(existing)
+            sw.add_task_from_outside(new_task)
+            return True
+        return False  # existing is same or higher priority — discard new_task
+
     # Handles a task being moved from Today to Tomorrow: creates a copy of the
-    # task with urgency dropped (urgency is Today-specific) and adds it to Tomorrow.
+    # task with urgency dropped (urgency is Today-specific) and adds it to Tomorrow,
+    # deduplicating against any existing Tomorrow task with the same text.
     def _on_task_moved_to_tomorrow(self, task: Task, from_sw: SectionWidget):
         tomorrow_sw = self.section_widgets.get("Tomorrow")
         if tomorrow_sw:
@@ -862,7 +895,7 @@ class MainWindow(QMainWindow):
                 urgent=False,  # Urgency is dropped when deferring to tomorrow
                 important=task.important,
             )
-            tomorrow_sw.add_task_from_outside(moved_task)
+            self._deduplicate_into(tomorrow_sw, moved_task)
 
     # Routes an urgent-promotion event to the correct cross-section operation
     # depending on whether the source is a recurring section, Today, or elsewhere.
@@ -875,28 +908,18 @@ class MainWindow(QMainWindow):
         else:
             self._promote_from_other(task, from_sw, today_sw)
 
-    # Copies a recurring task to Today (keeping the original in the recurring
-    # section). No-ops if a task with the same text is already present in Today.
+    # Copies a recurring task to Today (keeping the original in the recurring section),
+    # deduplicating against any existing Today task with the same text.
     def _promote_from_recurring(self, task: Task, today_sw: SectionWidget):
-        if self._today_has_task(task.text):
-            return
-        today_sw.add_task_from_outside(Task(
-            text=task.text, urgent=True, important=task.important
-        ))
+        self._deduplicate_into(today_sw, Task(text=task.text, urgent=True, important=task.important))
         today_sw.sort_tasks()
 
-    # Moves a task from its current section (e.g. Tomorrow) into Today.
-    # No-ops if a task with the same text is already present in Today.
+    # Moves a task from its current section (e.g. Tomorrow) into Today,
+    # deduplicating against any existing Today task with the same text.
     def _promote_from_other(self, task: Task, from_sw: SectionWidget, today_sw: SectionWidget):
-        if self._today_has_task(task.text):
-            return
         from_sw._remove_task_object(task)
-        today_sw.add_task_from_outside(task)
+        self._deduplicate_into(today_sw, task)
         today_sw.sort_tasks()
-
-    # Returns True if Today already contains a task with the given text.
-    def _today_has_task(self, text: str) -> bool:
-        return any(t.text == text for t in self.section_widgets["Today"].tasks)
 
     # Shows or hides all recurring SectionWidgets and updates the separator's
     # task count label when the collapse state changes.

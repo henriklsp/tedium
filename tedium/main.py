@@ -14,6 +14,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from . import store
+from .notifications import NotificationManager
 from .ui import MainWindow, STYLESHEET
 
 
@@ -43,12 +44,13 @@ def main():
     # Always save on startup to record today's date (enables rollover detection tomorrow)
     store.save(path, sections, date.today())
 
+    notif_manager = NotificationManager(icon)
+
     # Closure that captures path so callers need not know the storage location.
     def save_callback(secs):
         store.save(path, secs, date.today())
 
-    window = MainWindow(sections, save_callback, last_date)
-    window.setWindowIcon(icon)
+    window = MainWindow(sections, save_callback, date.today(), notif_manager)
     window.show()
 
     screen = app.primaryScreen().availableGeometry()

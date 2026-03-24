@@ -209,10 +209,23 @@ def _apply_day_rollover(
     return changed
 
 
-# Copies recurring tasks due on or before tomorrow into Today or Tomorrow.
-# Tasks due today or earlier (overdue) are injected into Today; tasks due
-# tomorrow are injected into Tomorrow. Advances each source task's next_date
-# past tomorrow. Returns True if any task was injected.
+# Returns a sort key for a task's priority; lower = higher priority.
+# Used to decide which of two duplicate tasks to keep.
+def task_priority(task: Task) -> int:
+    if task.urgent and task.important:
+        return 0
+    if task.urgent:
+        return 1
+    if task.important:
+        return 2
+    return 3
+
+
+# Copies recurring tasks into Today or Tomorrow based on their schedule.
+# Daily tasks are injected into Today only when due today or overdue.
+# Weekly/Monthly/Annually tasks are injected into Tomorrow the day before
+# they are due, and into Today on or after the due date. Advances each
+# source task's next_date past tomorrow. Returns True if any task was injected.
 def _inject_recurring_tasks(
     sections: dict[str, list[Task]], today: date
 ) -> bool:
@@ -220,21 +233,39 @@ def _inject_recurring_tasks(
     changed = False
     for section_name in (s for s in SECTION_ORDER if s in RECURRING):
         for task in sections.get(section_name, []):
-            if task.next_date is not None and task.next_date <= tomorrow:
+            if task.next_date is None:
+                continue
+            # Daily tasks go straight to Today only (no day-early lookahead).
+            if section_name == "Daily":
+                if task.next_date > today:
+                    continue
+                target = "Today"
+            else:
+                # Weekly/Monthly/Annually: appear in Tomorrow the day before,
+                # then in Today on the due date (rollover moves Tomorrow→Today).
+                if task.next_date > tomorrow:
+                    continue
                 target = "Today" if task.next_date <= today else "Tomorrow"
-                sections[target].append(Task(
-                    text=task.text,
-                    done=False,
-                    urgent=task.urgent,
-                    important=task.important,
-                    next_date=None,
-                ))
-                # Advance next_date past tomorrow
+            new_task = Task(text=task.text, done=False, urgent=task.urgent, important=task.important)
+            existing = next((t for t in sections[target] if t.text == task.text), None)
+            if existing is None:
+                sections[target].append(new_task)
+                changed = True
+            elif task_priority(new_task) < task_priority(existing):
+                sections[target].remove(existing)
+                sections[target].append(new_task)
+                changed = True
+            # else: existing is same or higher priority — skip injection
+            # Advance next_date so the task isn't re-injected this session.
+            # Daily: always set to tomorrow (never skip a day due to catch-up).
+            # Others: advance past tomorrow so the Tomorrow slot isn't re-filled.
+            if section_name == "Daily":
+                task.next_date = tomorrow
+            else:
                 nd = task.next_date
                 while nd <= tomorrow:
                     nd = next_date_for(section_name, nd)
                 task.next_date = nd
-                changed = True
     return changed
 
 
