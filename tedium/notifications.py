@@ -63,6 +63,14 @@ class NotificationManager(QObject):
         """Called by the UI whenever Today's task list changes."""
         self._today_tasks = list(tasks)
 
+    def notify_overdue_urgent(self, task_texts: list[str]) -> None:
+        """Immediately notify that urgent tasks were moved to the Overdue section."""
+        if task_texts:
+            self._show(
+                "Urgent tasks moved to overdue",
+                " · ".join(task_texts[:3]),
+            )
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

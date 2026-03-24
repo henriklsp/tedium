@@ -1,11 +1,11 @@
-from __future__ import annotations
+"""ui.py — Presentation layer.
 
-# ui.py
-# Presentation layer.
-# Responsible for all Qt UI components: the per-task widget (TaskWidget), the
-# per-section widget (SectionWidget), the recurring-section collapse separator
-# (RecurringSeparatorWidget), and the top-level main window (MainWindow).
-# Also exports the global Qt stylesheet (STYLESHEET) consumed by main.py.
+Responsible for all Qt UI components: the per-task widget (TaskWidget), the
+per-section widget (SectionWidget), the recurring-section collapse separator
+(RecurringSeparatorWidget), and the top-level main window (MainWindow).
+Also exports the global Qt stylesheet (STYLESHEET) consumed by main.py.
+"""
+from __future__ import annotations
 
 from datetime import date
 from typing import Callable, Optional
@@ -35,9 +35,12 @@ from .store import Task, SECTION_ORDER, RECURRING, next_date_for, next_weekday_d
 SECTION_BG = {
     "Tomorrow": "#f5f3f1",
     "Whenever": "#eae6e1",
+    "Overdue": "#c5bdb3",
 }
 # Shared background colour applied to all recurring sections and their separator.
 RECURRING_BG = "#d5cdc3"
+# Background colour for the Overdue section (slightly darker than RECURRING_BG).
+OVERDUE_BG = SECTION_BG["Overdue"]
 
 # Weekday names in Python weekday() order (0=Monday … 6=Sunday).
 _WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -98,7 +101,8 @@ QMenu::item:selected {
 # overdue status and section membership into account.
 def _widget_bg(section_name: str, task: Task) -> str:
     overdue = (
-        not task.done
+        section_name != "Overdue"  # Overdue tasks use next_date as expiry, not due-date
+        and not task.done
         and not task.urgent
         and not task.important
         and task.next_date is not None
@@ -130,9 +134,8 @@ def _edit_css(section_name: str, task: Task) -> str:
     return base + extra + "}"
 
 
-# Returns the QLabel stylesheet for the completion checkmark, sized to
-# match the section's font size.
 def _check_label_css() -> str:
+    """Return the QLabel stylesheet for the completion checkmark."""
     return (
         "QLabel { color: #aaaaaa; background: transparent; "
         "font-size: 12pt; padding: 0 2px 0 2px; }"
@@ -194,6 +197,7 @@ def _build_task_context_menu(
     *,
     on_edit: Callable,
     on_delete: Callable,
+    on_move_to_today: Optional[Callable] = None,
     on_move_to_tomorrow: Optional[Callable] = None,
     on_mark_urgent: Optional[Callable] = None,
     on_clear_urgent: Optional[Callable] = None,
@@ -207,9 +211,13 @@ def _build_task_context_menu(
     title.triggered.connect(on_edit)
     menu.addSeparator()
 
+    if on_move_to_today is not None:
+        act = menu.addAction("Move to Today")
+        act.triggered.connect(on_move_to_today)
     if on_move_to_tomorrow is not None:
         act = menu.addAction("Move to Tomorrow")
         act.triggered.connect(on_move_to_tomorrow)
+    if on_move_to_today is not None or on_move_to_tomorrow is not None:
         menu.addSeparator()
 
     if section_name != "Whenever":
@@ -300,6 +308,7 @@ class _TaskLineEdit(QLineEdit):
 class TaskWidget(QWidget):
     changed = Signal()
     delete_requested = Signal(QWidget)
+    move_to_today = Signal(QWidget)     # emitted from Overdue section
     move_to_tomorrow = Signal(QWidget)
     promote_urgent = Signal(QWidget)    # emitted when marked urgent
     marked_important = Signal(QWidget)  # emitted when important marked
@@ -406,20 +415,24 @@ class TaskWidget(QWidget):
 
     # Constructs and returns the right-click context menu.
     def _build_context_menu(self) -> QMenu:
+        is_overdue = self.section_name == "Overdue"
         return _build_task_context_menu(
             self.task,
             self.section_name,
             self,
             on_edit=self._start_edit,
             on_delete=lambda: self.delete_requested.emit(self),
+            on_move_to_today=(
+                (lambda: self.move_to_today.emit(self)) if is_overdue else None
+            ),
             on_move_to_tomorrow=(
                 (lambda: self.move_to_tomorrow.emit(self))
-                if self.section_name == "Today" else None
+                if self.section_name in ("Today", "Overdue") else None
             ),
-            on_mark_urgent=self._mark_urgent,
-            on_clear_urgent=self._clear_urgent,
-            on_mark_important=self._mark_important,
-            on_clear_important=self._clear_important,
+            on_mark_urgent=None if is_overdue else self._mark_urgent,
+            on_clear_urgent=None if is_overdue else self._clear_urgent,
+            on_mark_important=None if is_overdue else self._mark_important,
+            on_clear_important=None if is_overdue else self._clear_important,
             on_set_due_date=(
                 self._set_due_date if self.section_name in ("Weekly", "Annually") else None
             ),
@@ -649,7 +662,9 @@ class SectionWidget(QWidget):
     # is nudged one rank lower to reflect the cleared flag. When changed_tw is
     # provided with penalize=False the task is sorted without penalty (for promotion).
     def _sort_tasks(self, changed_tw=None, penalize=False):
-        # Returns an integer sort key; lower = higher priority in the list.
+        # Each priority band uses a pair of adjacent even/odd integers so that
+        # a penalized widget sorts after all non-penalized widgets in the same
+        # band without crossing into the next band.
         def sort_key(tw):
             t = tw.task
             c = penalize and (tw is changed_tw)
@@ -752,6 +767,115 @@ class RecurringSeparatorWidget(QWidget):
         self.style().drawPrimitive(QStyle.PE_Widget, opt, painter, self)
 
 
+# Displays the Overdue section: a collapsible widget that is entirely hidden when
+# there are no overdue tasks. It shares the same separator-line + triangle visual
+# style as RecurringSeparatorWidget, but manages its own task list.
+class OverdueSectionWidget(QWidget):
+    changed = Signal()
+    task_moved_to_today = Signal(object, object)    # task, self
+    task_moved_to_tomorrow = Signal(object, object) # task, self
+
+    def __init__(self, tasks: list[Task], parent=None):
+        super().__init__(parent)
+        self.tasks = tasks
+        self.section_name = "Overdue"
+        self._collapsed = False
+        self.setStyleSheet(f"background-color: {OVERDUE_BG};")
+        self._setup_ui()
+        self._update_visibility()
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Header row: thin line + count label (collapsed only) + toggle button
+        header = QWidget()
+        header.setStyleSheet(f"background-color: {OVERDUE_BG};")
+        h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(16, 10, 10, 4)
+        h_layout.setSpacing(8)
+
+        line = QFrame()
+        line.setFixedHeight(1)
+        line.setStyleSheet("background-color: #000000; border: none;")
+        h_layout.addWidget(line, stretch=1)
+
+        self._count_lbl = QLabel()
+        self._count_lbl.setStyleSheet(
+            "QLabel { font-size: 12pt; color: #555; background: transparent; }"
+        )
+        self._count_lbl.setVisible(False)
+        h_layout.addWidget(self._count_lbl)
+
+        self._btn = QPushButton("▾")
+        self._btn.setFlat(True)
+        self._btn.setFixedSize(20, 20)
+        self._btn.setCursor(Qt.PointingHandCursor)
+        self._btn.setStyleSheet(
+            "QPushButton { border: none; font-size: 12pt; background: transparent; "
+            "color: #666; padding: 0; }"
+            "QPushButton:hover { color: #000; }"
+        )
+        self._btn.clicked.connect(self._toggle)
+        h_layout.addWidget(self._btn)
+
+        layout.addWidget(header)
+
+        # Task list container
+        self._task_container = QWidget()
+        self._task_container.setStyleSheet(f"background-color: {OVERDUE_BG};")
+        self._task_layout = QVBoxLayout(self._task_container)
+        self._task_layout.setContentsMargins(16, 4, 16, 8)
+        self._task_layout.setSpacing(0)
+        for task in self.tasks:
+            self._add_task_widget(task)
+        layout.addWidget(self._task_container)
+
+    def _add_task_widget(self, task: Task) -> TaskWidget:
+        tw = TaskWidget(task, "Overdue")
+        tw.changed.connect(self.changed)
+        tw.delete_requested.connect(self._on_delete)
+        tw.move_to_today.connect(self._on_move_to_today)
+        tw.move_to_tomorrow.connect(self._on_move_to_tomorrow)
+        self._task_layout.addWidget(tw)
+        return tw
+
+    def _on_delete(self, tw: TaskWidget):
+        self._task_layout.removeWidget(tw)
+        tw.deleteLater()
+        if tw.task in self.tasks:
+            self.tasks.remove(tw.task)
+        self._update_visibility()
+        self.changed.emit()
+
+    def _on_move_to_today(self, tw: TaskWidget):
+        task = tw.task
+        self.task_moved_to_today.emit(task, self)
+        self._on_delete(tw)
+
+    def _on_move_to_tomorrow(self, tw: TaskWidget):
+        task = tw.task
+        self.task_moved_to_tomorrow.emit(task, self)
+        self._on_delete(tw)
+
+    def _toggle(self):
+        self._collapsed = not self._collapsed
+        self._btn.setText("▸" if self._collapsed else "▾")
+        self._count_lbl.setText(f"{len(self.tasks)} overdue tasks")
+        self._count_lbl.setVisible(self._collapsed)
+        self._task_container.setVisible(not self._collapsed)
+
+    def _update_visibility(self):
+        self.setVisible(bool(self.tasks))
+
+    def paintEvent(self, event):
+        opt = QStyleOption()
+        opt.initFrom(self)
+        painter = QPainter(self)
+        self.style().drawPrimitive(QStyle.PE_Widget, opt, painter, self)
+
+
 # The top-level application window. Owns a scrollable column of SectionWidgets,
 # a RecurringSeparatorWidget, a debounced auto-save timer, and all cross-section
 # coordination logic (task moves, urgent promotions, recurring collapse).
@@ -806,10 +930,17 @@ class MainWindow(QMainWindow):
         scroll.setWidget(container)
         self.setCentralWidget(scroll)
 
-    # Populates _main_layout with the recurring separator and all SectionWidgets.
-    # Called from _setup_ui on startup and from _rebuild_sections after rollover.
+    # Populates _main_layout with the Overdue widget, recurring separator, and all
+    # SectionWidgets in SECTION_ORDER order. Called on startup and after rollover.
     def _build_section_widgets(self):
         for section_name in SECTION_ORDER:
+            if section_name == "Overdue":
+                self._overdue_sw = OverdueSectionWidget(self.sections.get("Overdue", []))
+                self._overdue_sw.changed.connect(self._on_change)
+                self._overdue_sw.task_moved_to_today.connect(self._on_overdue_moved_to_today)
+                self._overdue_sw.task_moved_to_tomorrow.connect(self._on_overdue_moved_to_tomorrow)
+                self._main_layout.addWidget(self._overdue_sw)
+                continue
             if section_name == "Daily":  # first recurring section — insert separator above
                 self._main_layout.addWidget(self._recurring_sep)
             tasks = self.sections.get(section_name, [])
@@ -849,9 +980,16 @@ class MainWindow(QMainWindow):
         elif self._last_known_date is None:
             self._last_known_date = today
 
-    # Runs recurrence logic against the updated date, saves, and rebuilds the UI.
+    # Runs recurrence logic against the updated date, notifies about urgent tasks
+    # that moved to Overdue, saves, and rebuilds the UI.
     def _apply_rollover(self):
+        urgent_today = {t.text for t in self.sections.get("Today", []) if t.urgent}
+        overdue_before = {t.text for t in self.sections.get("Overdue", [])}
         self.sections, _ = store.check_recurrences(self.sections, self._last_known_date)
+        overdue_after = {t.text for t in self.sections.get("Overdue", [])}
+        newly_overdue_urgent = list(urgent_today & (overdue_after - overdue_before))
+        if newly_overdue_urgent and self._notif_manager:
+            self._notif_manager.notify_overdue_urgent(newly_overdue_urgent)
         self._last_known_date = date.today()
         self._save_callback(self.sections)
         self._rebuild_sections()
@@ -864,6 +1002,8 @@ class MainWindow(QMainWindow):
             self._main_layout.removeWidget(sw)
             sw.deleteLater()
         self.section_widgets.clear()
+        self._main_layout.removeWidget(self._overdue_sw)
+        self._overdue_sw.deleteLater()
         self._main_layout.removeWidget(self._recurring_sep)
         self._main_layout.removeWidget(self._filler)
         self._filler.deleteLater()
@@ -920,6 +1060,20 @@ class MainWindow(QMainWindow):
         from_sw._remove_task_object(task)
         self._deduplicate_into(today_sw, task)
         today_sw.sort_tasks()
+
+    # Moves an Overdue task into Today (as a plain task, expiry stripped).
+    def _on_overdue_moved_to_today(self, task: Task, from_sw):
+        today_sw = self.section_widgets.get("Today")
+        if today_sw:
+            self._deduplicate_into(today_sw, Task(text=task.text, done=False))
+            today_sw.sort_tasks()
+        self._sync_notif_manager()
+
+    # Moves an Overdue task into Tomorrow (expiry stripped).
+    def _on_overdue_moved_to_tomorrow(self, task: Task, from_sw):
+        tomorrow_sw = self.section_widgets.get("Tomorrow")
+        if tomorrow_sw:
+            self._deduplicate_into(tomorrow_sw, Task(text=task.text, done=False))
 
     # Shows or hides all recurring SectionWidgets and updates the separator's
     # task count label when the collapse state changes.

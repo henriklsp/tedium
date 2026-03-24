@@ -40,11 +40,18 @@ def main():
 
     path = get_tasks_path()
     sections, last_date = store.load(path)
+    # Track urgent Today tasks and Overdue set before rollover to detect transitions.
+    urgent_today = {t.text for t in sections.get("Today", []) if t.urgent}
+    overdue_before = {t.text for t in sections.get("Overdue", [])}
     sections, _ = store.check_recurrences(sections, last_date)
+    overdue_after = {t.text for t in sections.get("Overdue", [])}
+    newly_overdue_urgent = list(urgent_today & (overdue_after - overdue_before))
     # Always save on startup to record today's date (enables rollover detection tomorrow)
     store.save(path, sections, date.today())
 
     notif_manager = NotificationManager(icon)
+    if newly_overdue_urgent:
+        notif_manager.notify_overdue_urgent(newly_overdue_urgent)
 
     # Closure that captures path so callers need not know the storage location.
     def save_callback(secs):
