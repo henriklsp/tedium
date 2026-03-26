@@ -1,10 +1,10 @@
-from __future__ import annotations
+"""main.py — Application entry point.
 
-# main.py
-# Application entry point.
-# Responsible for wiring the data layer (store) and the presentation layer (ui):
-# resolves the task file path, loads persisted data, triggers startup recurrence
-# logic, and hands control to the Qt event loop.
+Responsible for wiring the data layer (store) and the presentation layer (ui):
+resolves the task file path, loads persisted data, triggers startup recurrence
+logic, and hands control to the Qt event loop.
+"""
+from __future__ import annotations
 
 import os
 import sys
@@ -23,6 +23,9 @@ def get_tasks_path() -> str:
 
 
 def get_icon() -> QIcon:
+    # sys.frozen and sys._MEIPASS are injected by PyInstaller at runtime; the
+    # assets folder is bundled alongside the executable. In development, fall
+    # back to the assets/ directory adjacent to the package root.
     if getattr(sys, "frozen", False):
         base = os.path.join(sys._MEIPASS, "assets")
     else:
@@ -30,9 +33,9 @@ def get_icon() -> QIcon:
     return QIcon(os.path.join(base, "tedium.ico"))
 
 
-# Orchestrates application startup: creates the Qt application, loads and
-# prepares task data, constructs the main window, and enters the event loop.
 def main():
+    """Orchestrate application startup: create the Qt app, load and prepare
+    task data, construct the main window, and enter the event loop."""
     app = QApplication(sys.argv)
     icon = get_icon()
     app.setWindowIcon(icon)

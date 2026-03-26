@@ -8,7 +8,10 @@ Also exports the global Qt stylesheet (STYLESHEET) consumed by main.py.
 from __future__ import annotations
 
 from datetime import date
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
+
+if TYPE_CHECKING:
+    from .notifications import NotificationManager
 
 from PySide6.QtCore import Qt, QObject, QTimer, Signal
 from PySide6.QtGui import QKeyEvent, QPainter, QFontMetrics
@@ -876,13 +879,22 @@ class OverdueSectionWidget(QWidget):
         self.style().drawPrimitive(QStyle.PE_Widget, opt, painter, self)
 
 
-# The top-level application window. Owns a scrollable column of SectionWidgets,
-# a RecurringSeparatorWidget, a debounced auto-save timer, and all cross-section
-# coordination logic (task moves, urgent promotions, recurring collapse).
 class MainWindow(QMainWindow):
-    # Stores the sections dict and save callback, initialises the debounce timer,
-    # and delegates layout construction to _setup_ui.
-    def __init__(self, sections: dict[str, list[Task]], save_callback: Callable, last_date: Optional[date] = None, notif_manager=None, parent=None):
+    """Top-level application window.
+
+    Owns a scrollable column of SectionWidgets, a RecurringSeparatorWidget,
+    a debounced auto-save timer, and all cross-section coordination logic
+    (task moves, urgent promotions, recurring collapse, date rollover).
+    """
+
+    def __init__(
+        self,
+        sections: dict[str, list[Task]],
+        save_callback: Callable,
+        last_date: date,
+        notif_manager: Optional[NotificationManager] = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self.sections = sections
         self._save_callback = save_callback

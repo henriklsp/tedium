@@ -1,15 +1,14 @@
-from __future__ import annotations
+"""notifications.py — In-memory notification scheduling for Today tasks.
 
-# notifications.py
-# In-memory notification scheduling for Today tasks.
-#
-# A "work session" begins when the app opens or when a wake-from-sleep is
-# detected via the heartbeat timer. Two checks fire per session:
-#   - 2 h after session start: notify if Today has urgent uncompleted tasks.
-#   - At min(session_start + 5 h, 14:00): notify if Today has important
-#     (non-urgent) uncompleted tasks.  The 14:00 cap only applies when the
-#     session started before 14:00; otherwise the 5 h rule governs.
-# Nothing is persisted — state resets on every app launch.
+A "work session" begins when the app opens or when a wake-from-sleep is
+detected via the heartbeat timer. Two checks fire per session:
+  - 2 h after session start: notify if Today has urgent uncompleted tasks.
+  - At min(session_start + 5 h, 14:00): notify if Today has important
+    (non-urgent) uncompleted tasks. The 14:00 cap only applies when the
+    session started before 14:00; otherwise the 5 h rule governs.
+Nothing is persisted — state resets on every app launch.
+"""
+from __future__ import annotations
 
 from datetime import datetime, timedelta
 from datetime import time as dtime
