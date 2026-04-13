@@ -202,6 +202,7 @@ def _build_task_context_menu(
     on_delete: Callable,
     on_move_to_today: Optional[Callable] = None,
     on_move_to_tomorrow: Optional[Callable] = None,
+    on_move_to_whenever: Optional[Callable] = None,
     on_mark_urgent: Optional[Callable] = None,
     on_clear_urgent: Optional[Callable] = None,
     on_mark_important: Optional[Callable] = None,
@@ -220,7 +221,10 @@ def _build_task_context_menu(
     if on_move_to_tomorrow is not None:
         act = menu.addAction("Move to Tomorrow")
         act.triggered.connect(on_move_to_tomorrow)
-    if on_move_to_today is not None or on_move_to_tomorrow is not None:
+    if on_move_to_whenever is not None:
+        act = menu.addAction("Move to Whenever")
+        act.triggered.connect(on_move_to_whenever)
+    if on_move_to_today is not None or on_move_to_tomorrow is not None or on_move_to_whenever is not None:
         menu.addSeparator()
 
     if section_name != "Whenever":
@@ -313,6 +317,7 @@ class TaskWidget(QWidget):
     delete_requested = Signal(QWidget)
     move_to_today = Signal(QWidget)     # emitted from Overdue section
     move_to_tomorrow = Signal(QWidget)
+    move_to_whenever = Signal(QWidget)
     promote_urgent = Signal(QWidget)    # emitted when marked urgent
     marked_important = Signal(QWidget)  # emitted when important marked
     cleared_urgent = Signal(QWidget)    # emitted when urgent cleared
@@ -432,6 +437,10 @@ class TaskWidget(QWidget):
                 (lambda: self.move_to_tomorrow.emit(self))
                 if self.section_name in ("Today", "Overdue") else None
             ),
+            on_move_to_whenever=(
+                (lambda: self.move_to_whenever.emit(self))
+                if self.section_name in ("Today", "Tomorrow", "Overdue") else None
+            ),
             on_mark_urgent=None if is_overdue else self._mark_urgent,
             on_clear_urgent=None if is_overdue else self._clear_urgent,
             on_mark_important=None if is_overdue else self._mark_important,
@@ -518,6 +527,7 @@ class AddTaskEdit(QLineEdit):
 class SectionWidget(QWidget):
     changed = Signal()
     task_moved_to_tomorrow = Signal(object, object)   # task, from_section_widget
+    task_moved_to_whenever = Signal(object, object)   # task, from_section_widget
     task_promoted_urgent = Signal(object, object)     # task, from_section_widget
 
     # Stores the section name and task list, applies the section background colour,
@@ -574,6 +584,7 @@ class SectionWidget(QWidget):
         tw.changed.connect(self.changed)
         tw.delete_requested.connect(self._on_delete_task)
         tw.move_to_tomorrow.connect(self._on_move_to_tomorrow)
+        tw.move_to_whenever.connect(self._on_move_to_whenever)
         tw.promote_urgent.connect(lambda tw=tw: self.task_promoted_urgent.emit(tw.task, self))
         tw.marked_important.connect(self._sort_tasks)
         tw.cleared_urgent.connect(self._on_task_sort)
@@ -646,6 +657,12 @@ class SectionWidget(QWidget):
     # removes the task from this section.
     def _on_move_to_tomorrow(self, task_widget: TaskWidget):
         self.task_moved_to_tomorrow.emit(task_widget.task, self)
+        self._on_delete_task(task_widget)
+
+    # Forwards a move-to-whenever request to the main window via signal, then
+    # removes the task from this section.
+    def _on_move_to_whenever(self, task_widget: TaskWidget):
+        self.task_moved_to_whenever.emit(task_widget.task, self)
         self._on_delete_task(task_widget)
 
     # Appends a task and its widget to this section from an external source
@@ -729,7 +746,7 @@ class RecurringSeparatorWidget(QWidget):
         self._line.setStyleSheet("background-color: #000000; border: none;")
         layout.addWidget(self._line, stretch=1)
 
-        # Count label — only visible when collapsed
+        # Count label — visible whenever there are tasks
         self._count_lbl = QLabel()
         self._count_lbl.setStyleSheet(
             "QLabel { font-size: 12pt; color: #666; background: transparent; }"
@@ -750,17 +767,17 @@ class RecurringSeparatorWidget(QWidget):
         self._btn.clicked.connect(self._toggle)
         layout.addWidget(self._btn)
 
-    # Flips the collapsed state, updates the button arrow and count label
-    # visibility, and emits toggled so the main window can show/hide sections.
+    # Flips the collapsed state, updates the button arrow, and emits toggled
+    # so the main window can show/hide sections.
     def _toggle(self):
         self._collapsed = not self._collapsed
         self._btn.setText("▸" if self._collapsed else "▾")
-        self._count_lbl.setVisible(self._collapsed)
         self.toggled.emit(self._collapsed)
 
-    # Updates the task count shown in the count label when the separator is collapsed.
+    # Updates the task count label text and shows it whenever count > 0.
     def update_count(self, count: int):
         self._count_lbl.setText(f"{count} recurring tasks")
+        self._count_lbl.setVisible(count > 0)
 
     # Required override — same reason as TaskWidget.paintEvent.
     def paintEvent(self, event):
@@ -777,6 +794,7 @@ class OverdueSectionWidget(QWidget):
     changed = Signal()
     task_moved_to_today = Signal(object, object)    # task, self
     task_moved_to_tomorrow = Signal(object, object) # task, self
+    task_moved_to_whenever = Signal(object, object) # task, self
 
     def __init__(self, tasks: list[Task], parent=None):
         super().__init__(parent)
@@ -841,6 +859,7 @@ class OverdueSectionWidget(QWidget):
         tw.delete_requested.connect(self._on_delete)
         tw.move_to_today.connect(self._on_move_to_today)
         tw.move_to_tomorrow.connect(self._on_move_to_tomorrow)
+        tw.move_to_whenever.connect(self._on_move_to_whenever)
         self._task_layout.addWidget(tw)
         return tw
 
@@ -862,14 +881,20 @@ class OverdueSectionWidget(QWidget):
         self.task_moved_to_tomorrow.emit(task, self)
         self._on_delete(tw)
 
+    def _on_move_to_whenever(self, tw: TaskWidget):
+        task = tw.task
+        self.task_moved_to_whenever.emit(task, self)
+        self._on_delete(tw)
+
     def _toggle(self):
         self._collapsed = not self._collapsed
         self._btn.setText("▸" if self._collapsed else "▾")
-        self._count_lbl.setText(f"{len(self.tasks)} overdue tasks")
-        self._count_lbl.setVisible(self._collapsed)
         self._task_container.setVisible(not self._collapsed)
 
     def _update_visibility(self):
+        count = len(self.tasks)
+        self._count_lbl.setText(f"{count} overdue tasks")
+        self._count_lbl.setVisible(count > 0)
         self.setVisible(bool(self.tasks))
 
     def paintEvent(self, event):
@@ -951,6 +976,7 @@ class MainWindow(QMainWindow):
                 self._overdue_sw.changed.connect(self._on_change)
                 self._overdue_sw.task_moved_to_today.connect(self._on_overdue_moved_to_today)
                 self._overdue_sw.task_moved_to_tomorrow.connect(self._on_overdue_moved_to_tomorrow)
+                self._overdue_sw.task_moved_to_whenever.connect(self._on_overdue_moved_to_whenever)
                 self._main_layout.addWidget(self._overdue_sw)
                 continue
             if section_name == "Daily":  # first recurring section — insert separator above
@@ -959,6 +985,7 @@ class MainWindow(QMainWindow):
             sw = SectionWidget(section_name, tasks)
             sw.changed.connect(self._on_change)
             sw.task_moved_to_tomorrow.connect(self._on_task_moved_to_tomorrow)
+            sw.task_moved_to_whenever.connect(self._on_task_moved_to_whenever)
             sw.task_promoted_urgent.connect(self._on_task_promoted_urgent)
             self.section_widgets[section_name] = sw
             self._main_layout.addWidget(sw)
@@ -967,6 +994,9 @@ class MainWindow(QMainWindow):
         self._filler.setStyleSheet(f"background-color: {RECURRING_BG}; border: none;")
         self._filler.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._main_layout.addWidget(self._filler)
+
+        count = sum(len(self.section_widgets[s].tasks) for s in RECURRING)
+        self._recurring_sep.update_count(count)
 
     # Pushes the current Today task list to the notification manager, if present.
     def _sync_notif_manager(self):
@@ -1086,6 +1116,18 @@ class MainWindow(QMainWindow):
         tomorrow_sw = self.section_widgets.get("Tomorrow")
         if tomorrow_sw:
             self._deduplicate_into(tomorrow_sw, Task(text=task.text, done=False))
+
+    # Moves a Today/Tomorrow task into Whenever (urgency dropped, importance kept).
+    def _on_task_moved_to_whenever(self, task: Task, from_sw: SectionWidget):
+        whenever_sw = self.section_widgets.get("Whenever")
+        if whenever_sw:
+            self._deduplicate_into(whenever_sw, Task(text=task.text, done=False, important=task.important))
+
+    # Moves an Overdue task into Whenever (expiry stripped, importance kept).
+    def _on_overdue_moved_to_whenever(self, task: Task, from_sw):
+        whenever_sw = self.section_widgets.get("Whenever")
+        if whenever_sw:
+            self._deduplicate_into(whenever_sw, Task(text=task.text, done=False, important=task.important))
 
     # Shows or hides all recurring SectionWidgets and updates the separator's
     # task count label when the collapse state changes.
