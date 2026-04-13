@@ -83,11 +83,24 @@ def _parse_task(line: str) -> Optional[Task]:
     return Task(text=line, done=done, urgent=urgent, important=important, next_date=next_date)
 
 
+_DONE_FILTERED_SECTIONS = frozenset({"Today", "Tomorrow", "Whenever"})
+
+
+def _remove_done_tasks(sections: dict[str, list[Task]]) -> bool:
+    """Remove completed tasks from Today, Tomorrow, and Whenever. Returns True if any were removed."""
+    changed = False
+    for name in _DONE_FILTERED_SECTIONS:
+        if name in sections:
+            before = len(sections[name])
+            sections[name] = [t for t in sections[name] if not t.done]
+            changed = changed or len(sections[name]) != before
+    return changed
+
+
 def load(path: str) -> tuple[dict[str, list[Task]], Optional[date]]:
     """Parse tasks.txt and return (sections, last_date).
 
-    Done tasks in Today and Tomorrow are filtered out on load — they disappear
-    on the next launch without modifying the file during the current session.
+    Done tasks in Today, Tomorrow, and Whenever are filtered out on load.
     """
     sections: dict[str, list[Task]] = {s: [] for s in SECTION_ORDER}
     current_section: Optional[str] = None
@@ -116,8 +129,8 @@ def load(path: str) -> tuple[dict[str, list[Task]], Optional[date]]:
                 task = _parse_task(line)
                 if task is None:
                     continue
-                # Skip done tasks in Today/Tomorrow — hidden on next launch
-                if task.done and current_section in ("Today", "Tomorrow"):
+                # Skip done tasks in Today/Tomorrow/Whenever on load
+                if task.done and current_section in _DONE_FILTERED_SECTIONS:
                     continue
                 # Recurring tasks must always have a due date; default to today
                 if current_section in RECURRING and task.next_date is None:
@@ -200,16 +213,19 @@ def _apply_day_rollover(
 ) -> bool:
     """Apply Today/Tomorrow rollover when the calendar date has advanced.
 
-    Important Today tasks are kept in Today. Unimportant tasks are moved to
-    Overdue (with an expiry date based on their recurring origin), except
-    Daily-recurring tasks which are simply dropped. All Tomorrow tasks move
-    into Today. Returns True if any mutation was made.
+    Removes completed tasks from Today, Tomorrow, and Whenever first. Then:
+    important Today tasks are kept, unimportant tasks move to Overdue (with an
+    expiry date based on their recurring origin), except Daily-recurring tasks
+    which are simply dropped. All Tomorrow tasks move into Today.
+    Returns True if any mutation was made.
 
     Rollover is skipped if last_date is None (first launch) or in the future
     (e.g. manually edited file).
     """
     if last_date is None or last_date >= today:
         return False
+
+    _remove_done_tasks(sections)
 
     daily_texts = {t.text for t in sections.get("Daily", [])}
     weekly_texts = {t.text for t in sections.get("Weekly", [])}

@@ -1191,17 +1191,17 @@ class DescribeFilePersistence:
         finally:
             os.unlink(path)
 
-    def retain_done_tasks_in_whenever(self):
+    def drop_done_tasks_in_whenever_on_load(self):
         """
         Given Whenever contains a done task
         When saved and reloaded
-        Then the done task is still present (only Today/Tomorrow filter done tasks)
+        Then the done task is absent
         """
         path = self._tmp_path()
         try:
             save(path, blank_sections(Whenever=[Task("Done", done=True)]), today=date(2026, 3, 6))
             restored, _ = load(path)
-            assert any(t.done for t in restored["Whenever"])
+            assert restored["Whenever"] == []
         finally:
             os.unlink(path)
 
